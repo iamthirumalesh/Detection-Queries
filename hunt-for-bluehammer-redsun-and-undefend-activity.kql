@@ -1,0 +1,71 @@
+// Hunt for BlueHammer, RedSun, and UnDefend activity
+// Based on Huntress article: https://www.huntress.com/blog/nightmare-eclipse-intrusion
+
+let SuspiciousFileNames = dynamic(["FunnyApp.exe", "RedSun.exe", "undef.exe", "z.exe"]);
+let SuspiciousProcessNames = dynamic(["FunnyApp.exe", "RedSun.exe", "undef.exe", "z.exe", "M365Copilot.exe", "cmdkey.exe", "whoami.exe", "net.exe"]);
+let SuspiciousCmdLinePatterns = @"(-h|-agressive|-aggressive)";
+let SuspiciousPaths = @"(C:\\Users\\.+\\Pictures\\.*|C:\\Users\\.+\\Downloads\\.+\\[A-Za-z]{2}\\.*)";
+let SuspiciousIPs = dynamic(["78.29.48.29", "185.174.137.74", "45.140.168.10"]);
+let BeigeBurrowIndicators = dynamic(["agent.exe", "BeigeBurrow"]);
+let ThreatActorIPs = dynamic(["78.29.48.29", "185.174.137.74", "45.140.168.10"]);
+let Lookback = 7d;
+
+// 1. Suspicious file creation events
+let SuspiciousFileEvents = DeviceFileEvents
+| where Timestamp > ago(Lookback)
+| where FolderPath matches regex SuspiciousPaths or FileName in~ (SuspiciousFileNames)
+| extend RuleName = "Suspicious_File_Creation"
+| project Timestamp, AssetName = DeviceName, FileName, FolderPath, SHA256, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+
+// 2. Suspicious process execution events
+let SuspiciousProcessEvents = union (DeviceProcessEvents | where Timestamp > ago(Lookback)), (DeviceFileEvents | where Timestamp > ago(Lookback))
+| where FileName in~ (SuspiciousProcessNames) or ProcessCommandLine matches regex SuspiciousCmdLinePatterns
+| extend RuleName = "Suspicious_Process_Execution"
+| project Timestamp, AssetName = DeviceName, FileName, FolderPath, ProcessCommandLine, SHA256, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+
+// 3. BeigeBurrow tunneling detection
+let BeigeBurrowEvents = DeviceProcessEvents
+| where Timestamp > ago(Lookback)
+| where FileName =~ "agent.exe" or ProcessCommandLine contains "BeigeBurrow" or SHA256 in~ (BeigeBurrowIndicators)
+| extend RuleName = "BeigeBurrow_Tunneling"
+| project Timestamp, AssetName = DeviceName, FileName, ProcessCommandLine, SHA256, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+
+// 4. Hands-on-keyboard reconnaissance commands
+let ReconEvents = DeviceProcessEvents
+| where Timestamp > ago(Lookback)
+| where (FileName =~ "cmd.exe" and ProcessCommandLine contains "whoami /priv")
+    or (FileName =~ "cmdkey.exe" and ProcessCommandLine contains "/list")
+    or (FileName =~ "net.exe" and ProcessCommandLine contains "group")
+    or (FileName =~ "M365Copilot.exe" and ProcessCommandLine contains "whoami /priv")
+| extend RuleName = "Reconnaissance_Commands"
+| project Timestamp, AssetName = DeviceName, FileName, ProcessCommandLine, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+
+// 5. Suspicious network connections (with column alignment)
+let NetworkEvents = 
+    DeviceNetworkEvents
+    | where Timestamp > ago(Lookback)
+    | where RemoteIP in~ (SuspiciousIPs) or RemoteIP in~ (ThreatActorIPs)
+    | extend RuleName = "Suspicious_Network_Connection"
+    | project Timestamp, AssetName = DeviceName, RemoteIP, RemotePort, Protocol, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+    union (
+        CommonSecurityLog
+        | where TimeGenerated > ago(Lookback)
+        | where DestinationIP in~ (SuspiciousIPs) or DestinationIP in~ (ThreatActorIPs)
+        | extend RuleName = "Suspicious_Network_Connection",
+                 RemoteIP = DestinationIP,
+                 RemotePort = DestinationPort,
+                 Protocol = tostring(Protocol)
+        | project Timestamp = TimeGenerated, AssetName = DeviceName, RemoteIP, RemotePort, Protocol, RuleName,
+                  AccountName = SourceUserName, ProcessName = SourceProcessName
+    );
+
+// 6. Potential privilege escalation via named pipe (RedSun)
+let PrivEscEvents = DeviceProcessEvents
+| where Timestamp > ago(Lookback)
+| where ProcessCommandLine contains "REDSUN"
+| extend RuleName = "Potential_Privilege_Escalation_NamedPipe"
+| project Timestamp, AssetName = DeviceName, FileName, ProcessCommandLine, RuleName, AccountName = InitiatingProcessAccountName, ProcessName = InitiatingProcessFileName;
+
+// Combine all findings into a single result set
+union SuspiciousFileEvents, SuspiciousProcessEvents, BeigeBurrowEvents, ReconEvents, NetworkEvents, PrivEscEvents
+| order by Timestamp desc
