@@ -1,0 +1,17 @@
+let PSTDomains = dynamic([ "pasastesintagcl.shop","pasastesintagcl.surf","pasastesintagclonline.casa", "pasastesintagclonline.click","pasastesintagclonline.help","pasastesintagclonline.mom", "pasastesintagclonline.sbs","pasastesintagclonline.top","pasastesintage.cyou", "pasastesintage.online","pasastesintages.casa","pasastesintages.online", "pasastesintagi.casa","pasastesintagi.cfd","pasastesintagi.lol","pasastesintagi.mom", "pasastesintagionline.best","pasastesintagionline.life","pasastesintagionline.mom", "pasastesintagionline.top","pasastesintago.beer","pasastesintago.best","pasastesintago.bond", "pasastesintago.casa","pasastesintago.life","pasastesintago.lol","pasastesintago.work", "pasastesintagoapp.casa","pasastesintagp.online","pasastesintags.beer","pasastesintags.best", "pasastesintags.fit","pasastesintags.fun","pasastesintags.homes","pasastesintags.ink", "pasastesintags.lat","pasastesintags.pics","pasastesintags.surf","pasastesintags.top", "pasastesintagx.online","pasastesintagy.online","pasastesintap.skin","pasastesintax.help", "pasastesintax.online","pasesetcsintag.xyz","thepasastesintagi.casa" ]); 
+// Email delivery 
+let EmailHits = EmailUrlInfo 
+| where Url has_any (PSTDomains) 
+| join kind=inner (EmailEvents) on NetworkMessageId 
+| project Timestamp = TimeGenerated, Entity = RecipientEmailAddress, Indicator = Url, Detail = strcat("From: ", SenderFromAddress, " | Subject: ", Subject, " | Action: ", DeliveryAction, " | Location: ", DeliveryLocation), MatchedTable = "EmailEvents";
+ // Safe Links URL clicks (often opened from Teams chat too) 
+ let ClickHits = UrlClickEvents 
+| where Url has_any (PSTDomains) 
+| project Timestamp = TimeGenerated, Entity = AccountUpn, Indicator = Url, Detail = strcat("ActionType: ", ActionType, " | ClickedThrough: ", tostring(IsClickedThrough), " | IP: ", tostring(IPAddress)), MatchedTable = "UrlClickEvents";
+  // Teams messages containing campaign domains 
+  let TeamsHits = CloudAppEvents 
+| where Application == "Microsoft Teams" 
+| where RawEventData has_any (PSTDomains) 
+| project Timestamp = TimeGenerated, Entity = AccountId, Indicator = tostring(RawEventData), Detail = strcat("ActionType: ", ActionType), MatchedTable = "CloudAppEvents-Teams"; 
+union EmailHits, ClickHits, TeamsHits 
+| sort by Timestamp desc
