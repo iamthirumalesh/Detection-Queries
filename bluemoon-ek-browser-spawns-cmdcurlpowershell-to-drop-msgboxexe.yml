@@ -1,0 +1,42 @@
+title: BlueMoon Exploit Chain Process Tree from Chromium Browser to msgbox.exe
+id: 6b6e2f4a-8c7b-4d2f-9e2a-3f7c1a9b5d21
+status: experimental
+description: Detects the BlueMoon exploit kit post-exploitation process tree where a Chromium-based browser (chrome.exe/msedge.exe) spawns cmd.exe, powershell.exe, or curl.exe to download and execute the msgbox.exe secondary payload into %TEMP%.
+author: detections.ai
+references:
+  - https://detections.ai/inspirations/01a089ba-8b55-77c7-aaba-b8aa0506f4b5
+date: '2026-09-10'
+modified: '2026-09-10'
+tags:
+  - attack.t1059.001
+  - attack.t1105
+  - attack.t1203
+  - attack.t1059.003
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection_browser_parent:
+    ParentImage|endswith:
+      - '\chrome.exe'
+      - '\msedge.exe'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\curl.exe'
+  selection_curl_download:
+    Image|endswith: '\curl.exe'
+    CommandLine|contains|all:
+      - '-sS'
+      - '-o'
+      - 'msgbox.exe'
+  selection_msgbox_exec:
+    Image|contains: '\AppData\Local\Temp\'
+    Image|endswith: '\msgbox.exe'
+  selection_msgbox_param:
+    CommandLine|contains: 'msgbox.exe'
+  condition: selection_browser_parent or selection_curl_download or selection_msgbox_exec or selection_msgbox_param
+falsepositives:
+  - Legitimate browser-initiated downloads using curl or PowerShell for administrative tooling
+  - Software update mechanisms that spawn command interpreters from browser processes
+level: high
